@@ -101,9 +101,11 @@ class RMSimulator(SchedulerSimulator):
             if self.ready_queue:
                 job = self.ready_queue[0]
                 job.remaining_time -= 1
+                self.results[job.task_id].executed_units += 1
                 
                 if job.remaining_time <= 0:
                     # Job completed
+                    job.completed = True
                     job.completion_time = current_time + 1
                     rt = job.response_time
                     
@@ -113,10 +115,16 @@ class RMSimulator(SchedulerSimulator):
                     if job.completion_time > job.absolute_deadline:
                         job.missed = True
                         self.results[job.task_id].misses += 1
+                        self.results[job.task_id].late_units += job.execution_time
+                    else:
+                        self.results[job.task_id].on_time_units += job.execution_time
                     
                     self.ready_queue.pop(0)
             
             current_time += 1
+
+        for job in self.ready_queue:
+            self.results[job.task_id].unfinished_units += job.remaining_time
         
         return self.results
 
@@ -160,9 +168,11 @@ class EDFSimulator(SchedulerSimulator):
             if self.ready_queue:
                 job = self.ready_queue[0]
                 job.remaining_time -= 1
+                self.results[job.task_id].executed_units += 1
                 
                 if job.remaining_time <= 0:
                     # Job completed
+                    job.completed = True
                     job.completion_time = current_time + 1
                     rt = job.response_time
                     
@@ -172,10 +182,16 @@ class EDFSimulator(SchedulerSimulator):
                     if job.completion_time > job.absolute_deadline:
                         job.missed = True
                         self.results[job.task_id].misses += 1
+                        self.results[job.task_id].late_units += job.execution_time
+                    else:
+                        self.results[job.task_id].on_time_units += job.execution_time
                     
                     self.ready_queue.pop(0)
             
             current_time += 1
+
+        for job in self.ready_queue:
+            self.results[job.task_id].unfinished_units += job.remaining_time
         
         return self.results
 
@@ -223,13 +239,21 @@ class SimulationRunner:
             avg_rts = [run[task_id].avg_response_time for run in runs]
             total_misses = sum(run[task_id].misses for run in runs)
             total_releases = sum(run[task_id].releases for run in runs)
+            total_executed_units = sum(run[task_id].executed_units for run in runs)
+            total_on_time_units = sum(run[task_id].on_time_units for run in runs)
+            total_late_units = sum(run[task_id].late_units for run in runs)
+            total_unfinished_units = sum(run[task_id].unfinished_units for run in runs)
             
             aggregated[task_id] = {
                 'max_rt': max(max_rts),
                 'avg_rt': sum(avg_rts) / len(avg_rts),
                 'min_rt': min([run[task_id].min_response_time for run in runs]),
                 'misses': total_misses,
-                'releases': total_releases
+                'releases': total_releases,
+                'scheduled_units': total_executed_units,
+                'units_within_scheduled_time': total_on_time_units,
+                'late_units': total_late_units,
+                'unfinished_units': total_unfinished_units
             }
         
         return aggregated

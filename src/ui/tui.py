@@ -65,7 +65,7 @@ class SchedulingTUI:
 
 [1] Load Task Set
 [2] View Task Set Info
-[3] Run DM Analysis
+[3] Run RM/DM Analysis
 [4] Run EDF Analysis
 [5] Run Simulation
 [6] Compare Algorithms
@@ -229,14 +229,16 @@ class SchedulingTUI:
         self.console.print(table)
         Prompt.ask("\nPress Enter to continue")
     
-    def run_dm_analysis(self):
-        """Run Deadline Monotonic analysis."""
+    def run_rm_analysis(self):
+        """Run fixed-priority (RM/DM) response-time analysis."""
         if not self.current_taskset:
             self.console.print("[yellow]No task set loaded.[/yellow]")
             Prompt.ask("\nPress Enter to continue")
             return
         
-        self.console.print("\n[bold]Deadline Monotonic Analysis[/bold]\n")
+        scheme = Prompt.ask("Fixed-priority scheme", choices=["rm", "dm"], default="rm")
+        scheme_name = "Rate Monotonic" if scheme == "rm" else "Deadline Monotonic"
+        self.console.print(f"\n[bold]{scheme_name} Analysis[/bold]\n")
         
         with Progress(
             SpinnerColumn(),
@@ -244,7 +246,10 @@ class SchedulingTUI:
             console=self.console
         ) as progress:
             task = progress.add_task("Analyzing...", total=None)
-            results = ResponseTimeAnalyzer.analyze_taskset_dm(self.current_taskset)
+            if scheme == "rm":
+                results = ResponseTimeAnalyzer.analyze_taskset_rm(self.current_taskset)
+            else:
+                results = ResponseTimeAnalyzer.analyze_taskset_dm(self.current_taskset)
         
         # Display results
         table = Table(box=box.ROUNDED)
@@ -272,28 +277,37 @@ class SchedulingTUI:
         schedulable = sum(1 for r in results if r.schedulable)
         self.console.print(f"\nSummary: {schedulable}/{len(results)} tasks schedulable")
         
-        self.results_cache['dm'] = results
+        self.results_cache[scheme] = results
         
         # Ask to save
         if Confirm.ask("\nSave results to file?", default=False):
-            self._save_dm_results(results)
+            self._save_fp_results(results, scheme)
         
         Prompt.ask("\nPress Enter to continue")
     
-    def _save_dm_results(self, results: List[AnalysisResult]):
-        """Save DM analysis results with detailed descriptions."""
+    def _save_fp_results(self, results: List[AnalysisResult], scheme: str):
+        """Save RM/DM analysis results with detailed descriptions."""
         if not self.current_run_dir:
             self.current_run_dir = self.create_results_directory()
+
+        is_rm = scheme == "rm"
+        scheme_short = "RM" if is_rm else "DM"
+        scheme_name = "Rate Monotonic" if is_rm else "Deadline Monotonic"
+        priority_scheme = (
+            "Rate Monotonic - shorter period = higher priority"
+            if is_rm else
+            "Deadline Monotonic - shorter deadline = higher priority"
+        )
         
         # Save as JSON with metadata
-        json_file = self.current_run_dir / f"{self.current_taskset.name}_dm_analysis.json"
-        dm_data = {
+        json_file = self.current_run_dir / f"{self.current_taskset.name}_{scheme}_analysis.json"
+        rm_data = {
             "_metadata": {
-                "analysis_type": "Deadline Monotonic (DM) Response Time Analysis",
+                "analysis_type": f"{scheme_name} ({scheme_short}) Response Time Analysis",
                 "algorithm": "Fixed-point iteration (Buttazzo Eq. 4.24)",
-                "description": "Calculates Worst-Case Response Time (WCRT) for each task under DM scheduling",
+                "description": f"Calculates Worst-Case Response Time (WCRT) for each task under {scheme_short} scheduling",
                 "schedulability_criterion": "Task is schedulable if WCRT <= Deadline",
-                "priority_scheme": "Deadline Monotonic - shorter deadline = higher priority",
+                "priority_scheme": priority_scheme,
                 "task_set": self.current_taskset.name,
                 "total_utilization": self.current_taskset.total_utilization,
                 "num_tasks": self.current_taskset.num_tasks,
@@ -324,14 +338,14 @@ class SchedulingTUI:
         }
         
         with open(json_file, 'w') as f:
-            json.dump(dm_data, f, indent=2)
+            json.dump(rm_data, f, indent=2)
         
         # Save as CSV with header comments
-        csv_file = self.current_run_dir / f"{self.current_taskset.name}_dm_analysis.csv"
+        csv_file = self.current_run_dir / f"{self.current_taskset.name}_{scheme}_analysis.csv"
         with open(csv_file, 'w', newline='') as f:
             writer = csv.writer(f)
             # Write header comments
-            writer.writerow(['# Deadline Monotonic (DM) Response Time Analysis'])
+            writer.writerow([f'# {scheme_name} ({scheme_short}) Response Time Analysis'])
             writer.writerow(['# Algorithm: Fixed-point iteration (Buttazzo Eq. 4.24)'])
             writer.writerow(['#'])
             writer.writerow(['# FIELD DESCRIPTIONS:'])
@@ -474,6 +488,8 @@ class SchedulingTUI:
         )
         
         runner = SimulationRunner(self.current_taskset, duration, num_runs=3)
+        rm_results = None
+        edf_results = None
         
         # Run RM
         if algorithm in ["rm", "both"]:
@@ -508,6 +524,10 @@ class SchedulingTUI:
             
             if Confirm.ask("Save EDF simulation results?", default=False):
                 self._save_simulation_results(edf_results, "edf")
+
+        if algorithm == "both" and rm_results and edf_results:
+            if Confirm.ask("Save combined RM + EDF execution CSV?", default=True):
+                self._save_combined_execution_results(rm_results, edf_results)
         
         Prompt.ask("\nPress Enter to continue")
     
@@ -516,6 +536,8 @@ class SchedulingTUI:
         table = Table(box=box.ROUNDED)
         table.add_column("Task", style="cyan")
         table.add_column("Releases", justify="right")
+        table.add_column("Scheduled Units", justify="right")
+        table.add_column("On-Time Units", justify="right")
         table.add_column("Avg RT", justify="right")
         table.add_column("Max RT", justify="right")
         table.add_column("Misses", justify="right")
@@ -530,6 +552,8 @@ class SchedulingTUI:
             table.add_row(
                 f"T{task_id}",
                 str(data['releases']),
+                str(data.get('scheduled_units', 0)),
+                str(data.get('units_within_scheduled_time', 0)),
                 f"{data['avg_rt']:.2f}",
                 f"{data['max_rt']}",
                 str(data['misses']),
@@ -563,6 +587,10 @@ class SchedulingTUI:
             "field_descriptions": {
                 "task_id": "Unique identifier for the task",
                 "releases": "Number of job instances released during simulation",
+                "scheduled_units": "CPU time units actually scheduled/executed for this task",
+                "units_within_scheduled_time": "Execution units belonging to jobs that completed within deadline",
+                "late_units": "Execution units belonging to jobs that completed after deadline",
+                "unfinished_units": "Execution units still pending at simulation end",
                 "avg_rt": "Average Response Time - mean time from job release to completion across all jobs",
                 "max_rt": "Maximum Response Time - longest observed response time (compare with WCRT)",
                 "min_rt": "Minimum Response Time - shortest observed response time",
@@ -574,6 +602,8 @@ class SchedulingTUI:
                 "total_tasks": len(results),
                 "total_releases": sum(s['releases'] for s in results.values()),
                 "total_misses": sum(s['misses'] for s in results.values()),
+                "total_scheduled_units": sum(s.get('scheduled_units', 0) for s in results.values()),
+                "total_units_within_scheduled_time": sum(s.get('units_within_scheduled_time', 0) for s in results.values()),
                 "tasks_with_misses": sum(1 for s in results.values() if s['misses'] > 0),
                 "system_schedulable": all(s['misses'] == 0 for s in results.values())
             }
@@ -595,16 +625,35 @@ class SchedulingTUI:
             writer.writerow(['# FIELD DESCRIPTIONS:'])
             writer.writerow(['# Task: Task identifier'])
             writer.writerow(['# Releases: Number of job instances released'])
+            writer.writerow(['# Scheduled_Units: CPU time units actually executed for the task'])
+            writer.writerow(['# Units_Within_Scheduled_Time: Execution units of jobs that completed before/equal deadline'])
+            writer.writerow(['# Late_Units: Execution units of jobs that completed after deadline'])
+            writer.writerow(['# Unfinished_Units: Execution units still pending at end of simulation'])
             writer.writerow(['# Avg_RT: Average response time across all jobs (time units)'])
             writer.writerow(['# Max_RT: Maximum observed response time - compare with analytical WCRT'])
             writer.writerow(['# Min_RT: Minimum observed response time'])
             writer.writerow(['# Misses: Jobs that missed deadline (should be 0 for schedulable system)'])
             writer.writerow(['#'])
-            writer.writerow(['Task', 'Releases', 'Avg_RT', 'Max_RT', 'Min_RT', 'Misses'])
+            writer.writerow([
+                'Task',
+                'Releases',
+                'Scheduled_Units',
+                'Units_Within_Scheduled_Time',
+                'Late_Units',
+                'Unfinished_Units',
+                'Avg_RT',
+                'Max_RT',
+                'Min_RT',
+                'Misses'
+            ])
             for task_id, data in results.items():
                 writer.writerow([
                     f"T{task_id}",
                     data['releases'],
+                    data.get('scheduled_units', 0),
+                    data.get('units_within_scheduled_time', 0),
+                    data.get('late_units', 0),
+                    data.get('unfinished_units', 0),
                     data['avg_rt'],
                     data['max_rt'],
                     data.get('min_rt', 0),
@@ -613,6 +662,44 @@ class SchedulingTUI:
         
         self.console.print(f"[green]✓ Results saved to:[/green]")
         self.console.print(f"  {json_file}")
+        self.console.print(f"  {csv_file}")
+
+    def _save_combined_execution_results(self, rm_results: dict, edf_results: dict):
+        """Save a per-task RM/EDF execution comparison CSV."""
+        if not self.current_run_dir:
+            self.current_run_dir = self.create_results_directory()
+
+        csv_file = self.current_run_dir / f"{self.current_taskset.name}_rm_edf_execution_comparison.csv"
+        with open(csv_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['# RM vs EDF Task Execution Comparison'])
+            writer.writerow(['# Scheduled_Units: CPU units executed/scheduled for the task'])
+            writer.writerow(['# Units_Within_Scheduled_Time: Execution units from jobs completed within deadline'])
+            writer.writerow(['#'])
+            writer.writerow([
+                'Task',
+                'RM_Scheduled_Units',
+                'RM_Units_Within_Scheduled_Time',
+                'RM_Misses',
+                'EDF_Scheduled_Units',
+                'EDF_Units_Within_Scheduled_Time',
+                'EDF_Misses'
+            ])
+
+            for task in self.current_taskset.tasks:
+                rm_data = rm_results.get(task.id, {})
+                edf_data = edf_results.get(task.id, {})
+                writer.writerow([
+                    task.name,
+                    rm_data.get('scheduled_units', 0),
+                    rm_data.get('units_within_scheduled_time', 0),
+                    rm_data.get('misses', 0),
+                    edf_data.get('scheduled_units', 0),
+                    edf_data.get('units_within_scheduled_time', 0),
+                    edf_data.get('misses', 0)
+                ])
+
+        self.console.print(f"[green]✓ Combined execution CSV saved:[/green]")
         self.console.print(f"  {csv_file}")
     
     def compare_algorithms(self):
@@ -627,7 +714,7 @@ class SchedulingTUI:
         # Run all analyses
         self.console.print("[dim]Running analyses...[/dim]")
         
-        dm_results = ResponseTimeAnalyzer.analyze_taskset_dm(self.current_taskset)
+        rm_results = ResponseTimeAnalyzer.analyze_taskset_rm(self.current_taskset)
         edf_result = EDFAnalyzer.analyze_taskset(self.current_taskset)
         
         runner = SimulationRunner(self.current_taskset, duration=50000, num_runs=3)
@@ -637,19 +724,19 @@ class SchedulingTUI:
         # Display comparison
         table = Table(box=box.ROUNDED)
         table.add_column("Task", style="cyan")
-        table.add_column("DM WCRT", justify="right")
+        table.add_column("RM WCRT", justify="right")
         table.add_column("RM Sim Max", justify="right")
         table.add_column("EDF Sim Max", justify="right")
         table.add_column("Deadline", justify="right")
         
         for task in self.current_taskset.tasks:
-            dm_wcrt = next((r.wcrt for r in dm_results if r.task_id == task.id), 0)
+            rm_wcrt = next((r.wcrt for r in rm_results if r.task_id == task.id), 0)
             rm_max = rm_sim.get(task.id, {}).get('max_rt', 0)
             edf_max = edf_sim.get(task.id, {}).get('max_rt', 0)
             
             table.add_row(
                 task.name,
-                f"{dm_wcrt:.2f}",
+                f"{rm_wcrt:.2f}",
                 f"{rm_max}",
                 f"{edf_max}",
                 str(task.deadline)
@@ -659,7 +746,7 @@ class SchedulingTUI:
         
         # Summary
         self.console.print(f"\n[bold]Summary:[/bold]")
-        self.console.print(f"  DM Analysis: {sum(1 for r in dm_results if r.schedulable)}/{len(dm_results)} schedulable")
+        self.console.print(f"  RM Analysis: {sum(1 for r in rm_results if r.schedulable)}/{len(rm_results)} schedulable")
         self.console.print(f"  EDF Analysis: {'Schedulable' if edf_result['schedulable'] else 'Not Schedulable'}")
         
         rm_total_misses = sum(s['misses'] for s in rm_sim.values())
@@ -669,11 +756,11 @@ class SchedulingTUI:
         
         # Ask to save
         if Confirm.ask("\nSave comparison results?", default=False):
-            self._save_comparison_results(dm_results, edf_result, rm_sim, edf_sim)
+            self._save_comparison_results(rm_results, edf_result, rm_sim, edf_sim)
         
         Prompt.ask("\nPress Enter to continue")
     
-    def _save_comparison_results(self, dm_results, edf_result, rm_sim, edf_sim):
+    def _save_comparison_results(self, rm_results, edf_result, rm_sim, edf_sim):
         """Save comparison results with detailed descriptions."""
         if not self.current_run_dir:
             self.current_run_dir = self.create_results_directory()
@@ -681,7 +768,7 @@ class SchedulingTUI:
         # Prepare comparison data with descriptions
         comparison = {
             "_metadata": {
-                "analysis_type": "Algorithm Comparison - DM vs RM vs EDF",
+                "analysis_type": "Algorithm Comparison - RM vs EDF",
                 "description": "Comprehensive comparison of analytical and simulated results",
                 "task_set": self.current_taskset.name,
                 "total_utilization": self.current_taskset.total_utilization,
@@ -689,13 +776,13 @@ class SchedulingTUI:
                 "timestamp": datetime.now().isoformat()
             },
             "comparison_notes": {
-                "dm_vs_rm": "DM and RM use the same fixed-priority algorithm but different priority assignments: DM by deadline, RM by period",
+                "rm_priority": "RM is fixed-priority: shorter period means higher priority",
                 "wcrt_vs_simulation": "WCRT (analytical) is the UPPER BOUND. Simulated max should be <= WCRT.",
                 "edf_advantage": "EDF typically achieves better response times for low-priority tasks than fixed-priority",
-                "key_insight": "Compare DM_WCRT (worst-case bound) with RM_Sim_Max (observed) - simulation should not exceed analysis"
+                "key_insight": "Compare RM_WCRT (worst-case bound) with RM_Sim_Max (observed) - simulation should not exceed analysis"
             },
             "field_descriptions": {
-                "dm_wcrt": "Deadline Monotonic Worst-Case Response Time (analytical upper bound)",
+                "rm_wcrt": "Rate Monotonic Worst-Case Response Time (analytical upper bound)",
                 "rm_sim_max": "Rate Monotonic max observed response time from simulation",
                 "edf_sim_max": "EDF max observed response time from simulation",
                 "deadline": "Task deadline - all response times should be <= deadline for schedulability"
@@ -703,21 +790,21 @@ class SchedulingTUI:
             "taskset": self.current_taskset.name,
             "utilization": self.current_taskset.total_utilization,
             "num_tasks": self.current_taskset.num_tasks,
-            "dm_analysis": {
-                "schedulable": sum(1 for r in dm_results if r.schedulable),
-                "total": len(dm_results),
+            "rm_analysis": {
+                "schedulable": sum(1 for r in rm_results if r.schedulable),
+                "total": len(rm_results),
                 "tasks": {r.task_name: {'wcrt': r.wcrt, 'deadline': r.deadline, 'schedulable': r.schedulable} 
-                         for r in dm_results}
+                         for r in rm_results}
             },
             "edf_analysis": edf_result,
             "rm_simulation": rm_sim,
             "edf_simulation": edf_sim,
             "summary": {
-                "dm_tasks_schedulable": sum(1 for r in dm_results if r.schedulable),
+                "rm_tasks_schedulable": sum(1 for r in rm_results if r.schedulable),
                 "edf_system_schedulable": edf_result.get('schedulable', False),
                 "rm_total_misses": sum(s['misses'] for s in rm_sim.values()),
                 "edf_total_misses": sum(s['misses'] for s in edf_sim.values()),
-                "winner": "EDF" if edf_result.get('schedulable', False) and not all(r.schedulable for r in dm_results) else "TIE" if edf_result.get('schedulable', False) == all(r.schedulable for r in dm_results) else "DM"
+                "winner": "EDF" if edf_result.get('schedulable', False) and not all(r.schedulable for r in rm_results) else "TIE" if edf_result.get('schedulable', False) == all(r.schedulable for r in rm_results) else "RM"
             }
         }
         
@@ -729,24 +816,24 @@ class SchedulingTUI:
         csv_file = self.current_run_dir / f"{self.current_taskset.name}_comparison.csv"
         with open(csv_file, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['# Algorithm Comparison: DM vs RM vs EDF'])
+            writer.writerow(['# Algorithm Comparison: RM vs EDF'])
             writer.writerow(['#'])
             writer.writerow(['# FIELD DESCRIPTIONS:'])
             writer.writerow(['# Task: Task identifier'])
-            writer.writerow(['# DM_WCRT: Deadline Monotonic Worst-Case Response Time (analytical upper bound)'])
+            writer.writerow(['# RM_WCRT: Rate Monotonic Worst-Case Response Time (analytical upper bound)'])
             writer.writerow(['# RM_Sim_Max: Rate Monotonic max observed response time from simulation'])
             writer.writerow(['# EDF_Sim_Max: EDF max observed response time from simulation'])
             writer.writerow(['# Deadline: Task deadline - all values should be <= deadline'])
             writer.writerow(['#'])
-            writer.writerow(['# KEY INSIGHT: Compare DM_WCRT (worst-case) with RM_Sim_Max (observed)'])
+            writer.writerow(['# KEY INSIGHT: Compare RM_WCRT (worst-case) with RM_Sim_Max (observed)'])
             writer.writerow(['# Simulation values should NOT exceed analytical WCRT'])
             writer.writerow(['#'])
-            writer.writerow(['Task', 'DM_WCRT', 'RM_Sim_Max', 'EDF_Sim_Max', 'Deadline'])
+            writer.writerow(['Task', 'RM_WCRT', 'RM_Sim_Max', 'EDF_Sim_Max', 'Deadline'])
             for task in self.current_taskset.tasks:
-                dm_wcrt = next((r.wcrt for r in dm_results if r.task_id == task.id), 0)
+                rm_wcrt = next((r.wcrt for r in rm_results if r.task_id == task.id), 0)
                 rm_max = rm_sim.get(task.id, {}).get('max_rt', 0)
                 edf_max = edf_sim.get(task.id, {}).get('max_rt', 0)
-                writer.writerow([task.name, dm_wcrt, rm_max, edf_max, task.deadline])
+                writer.writerow([task.name, rm_wcrt, rm_max, edf_max, task.deadline])
         
         self.console.print(f"[green]✓ Results saved to:[/green]")
         self.console.print(f"  {json_file}")
@@ -912,7 +999,7 @@ class SchedulingTUI:
                 "0.2-0.4": "Low utilization - good schedulability expected",
                 "0.4-0.6": "Medium utilization - schedulability starts to vary",
                 "0.6-0.8": "High utilization - EDF advantage becomes significant",
-                "0.8-1.0": "Very high utilization - difficult to schedule, EDF much better than DM"
+                "0.8-1.0": "Very high utilization - difficult to schedule, EDF often better than DM"
             },
             "expected_findings": {
                 "dm_limit": "DM typically works well up to ~70% utilization (Liu & Layland bound)",
@@ -1015,7 +1102,7 @@ class SchedulingTUI:
                 '0.2-0.4': 'Low - high schedulability expected',
                 '0.4-0.6': 'Medium - schedulability varies',
                 '0.6-0.8': 'High - EDF advantage becomes clear',
-                '0.8-1.0': 'Very high - EDF much better than DM'
+                '0.8-1.0': 'Very high - EDF often better than DM'
             }
             
             for range_name, range_results in util_ranges.items():
@@ -1037,7 +1124,7 @@ class SchedulingTUI:
             f.write("  - At high utilization (0.8-1.0): EDF significantly outperforms DM\n\n")
             
             f.write("### Utilization Thresholds\n")
-            f.write("- **DM practical limit:** ~70% utilization (Liu & Layland bound for RM)\n")
+            f.write("- **DM practical limit:** ~70% utilization (Liu & Layland bound)\n")
             f.write("- **EDF theoretical limit:** 100% utilization (optimal)\n")
             f.write("- **Observed in data:** Gap between DM and EDF widens as U approaches 1.0\n\n")
             
@@ -1079,7 +1166,7 @@ class SchedulingTUI:
             elif choice == "2":
                 self.view_taskset_info()
             elif choice == "3":
-                self.run_dm_analysis()
+                self.run_rm_analysis()
             elif choice == "4":
                 self.run_edf_analysis()
             elif choice == "5":

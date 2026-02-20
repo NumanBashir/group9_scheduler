@@ -136,6 +136,10 @@ class SimulationResult:
     response_times: List[int] = field(default_factory=list)
     misses: int = 0
     releases: int = 0
+    executed_units: int = 0
+    on_time_units: int = 0
+    late_units: int = 0
+    unfinished_units: int = 0
     
     @property
     def avg_response_time(self) -> float:
