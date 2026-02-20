@@ -160,6 +160,54 @@ Earliest Deadline First (EDF) - Processor Demand Analysis:
 - EDF typically achieves better response times for low-priority tasks
 - All task sets should be schedulable at 60% utilization
 
+## New Features: OOP + TUI
+
+### Object-Oriented Refactor
+
+The code has been refactored into a clean OOP structure:
+
+```
+src/
+├── core/
+│   ├── models.py       # Task, Job, TaskSet, Results classes
+│   ├── analysis.py     # ResponseTimeAnalyzer, EDFAnalyzer
+│   └── simulator.py    # RMSimulator, EDFSimulator, SimulationRunner
+├── utils/
+│   └── parser.py       # TaskSetParser
+└── ui/
+    └── tui.py          # Rich-based interactive TUI
+```
+
+### Interactive TUI
+
+Launch the modern terminal interface:
+
+```bash
+python main.py
+```
+
+**Features:**
+- Beautiful formatted tables and panels
+- Interactive menus with keyboard navigation
+- Real-time progress indicators
+- Task set browser with filtering
+- Batch analysis with utilization grouping
+- Side-by-side algorithm comparison
+
+**Menu Options:**
+1. Load Task Set (single file, directory, or task-sets collection)
+2. View Task Set Info (formatted table view)
+3. Run DM Analysis (WCRT calculations)
+4. Run EDF Analysis (Processor Demand)
+5. Run Simulation (RM/EDF with configurable duration)
+6. Compare Algorithms (all in one)
+7. Batch Analysis (process 100s of task sets)
+8. Exit
+
+### Legacy Support
+
+The original single-file version is preserved as `main_old.py`.
+
 ## References
 
 - Giorgio Buttazzo, "Hard Real-Time Computing Systems", Chapter 4
