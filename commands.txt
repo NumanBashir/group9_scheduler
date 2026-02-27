@@ -1,3 +1,20 @@
 Make sure to cd into real-time-task_generators
 ./task_generator.py --nset=5 --ntask=10 --utilization=60
 
+Worst-Case Execution Time (WCET) simulation:
+This runs
+- DM analytical WCRT analysis 
+- EDF analytical schedulability analysis
+- Simulation where all jobs execute for their WCET
+
+python main.py --root data/output --exec wcet
+
+
+Random execution-time simulation
+- Uses the same task sets
+- Simulates execution times randomly chosen between BCET and WCET
+- Uses a fixed random seed for reproducibility
+- Again performs both analytical checks and simulation
+
+python main.py --root data/output --exec random --seed 123
+
