@@ -38,6 +38,7 @@ def main():
         print(f"Limiting run to first {len(metas)} tasksets")
 
     rows = []
+    per_task_rows = []
     for idx, meta in enumerate(metas, 1):
         tasks = load_taskset(meta.path)
         U = util(tasks)
@@ -57,6 +58,42 @@ def main():
 
         dm_sched = int(dm.schedulable and not overloaded)
         edf_sched = int(edf.schedulable and not overloaded)
+        dm_validation_failures = 0
+        max_dm_analytic_wcrt = max(dm.wcrt.values())
+        max_sim_dm_rt = 0
+        max_sim_edf_rt = 0
+
+        for task in tasks:
+            dm_stats = sim_dm.per_task[task.name]
+            edf_stats = sim_edf.per_task[task.name]
+            dm_analytic_wcrt = dm.wcrt[task.name]
+            dm_within_bound = int(dm_stats.max_rt <= dm_analytic_wcrt)
+            dm_validation_failures += int(not dm_within_bound)
+            max_sim_dm_rt = max(max_sim_dm_rt, dm_stats.max_rt)
+            max_sim_edf_rt = max(max_sim_edf_rt, edf_stats.max_rt)
+
+            per_task_rows.append({
+                "path": meta.path,
+                "distribution": meta.distribution,
+                "family": meta.family,
+                "util_bucket": meta.util_bucket,
+                "task": task.name,
+                "period": task.period,
+                "deadline": task.deadline,
+                "wcet": task.wcet,
+                "bcet": task.bcet_eff,
+                "dm_analytic_wcrt": dm_analytic_wcrt,
+                "dm_analytic_meets_deadline": int(dm_analytic_wcrt <= task.deadline),
+                "sim_dm_jobs": dm_stats.jobs,
+                "sim_dm_avg_rt": round(dm_stats.avg(), 3),
+                "sim_dm_max_rt": dm_stats.max_rt,
+                "sim_dm_missed": dm_stats.missed,
+                "sim_dm_within_dm_wcrt": dm_within_bound,
+                "sim_edf_jobs": edf_stats.jobs,
+                "sim_edf_avg_rt": round(edf_stats.avg(), 3),
+                "sim_edf_max_rt": edf_stats.max_rt,
+                "sim_edf_missed": edf_stats.missed,
+            })
 
         row = {
             "path": meta.path,
@@ -71,6 +108,10 @@ def main():
             "edf_checked_points": edf.checked_points,
             "edf_worst_violation": edf.worst_violation,
             "sim_horizon": horizon,
+            "dm_max_analytic_wcrt": max_dm_analytic_wcrt,
+            "sim_dm_max_rt": max_sim_dm_rt,
+            "sim_edf_max_rt": max_sim_edf_rt,
+            "dm_wcrt_validation_failures": dm_validation_failures,
             "sim_dm_missed_total": sim_dm.total_missed,
             "sim_edf_missed_total": sim_edf.total_missed,
         }
@@ -82,6 +123,10 @@ def main():
     all_path = os.path.join(args.out, "all_tasksets.csv")
     write_all_tasksets_csv(rows, all_path)
     print(f"Saved per-taskset summary: {all_path}")
+
+    per_task_path = os.path.join(args.out, "per_task_response_times.csv")
+    write_all_tasksets_csv(per_task_rows, per_task_path)
+    print(f"Saved per-task response-time summary: {per_task_path}")
 
     agg = aggregate_by_bucket(rows)
     agg_path = os.path.join(args.out, "aggregate_by_bucket.csv")
